@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Oodinals-test</title>
+  <title>Oodinals-onchain</title>
 
   
   <script>
@@ -79,12 +79,119 @@
         const origin = (forceOrd ? 'https://ordinals.com' : (qsOrigin || storedOrigin || defaultOrigin || '')).trim();
         window.__NEXUS_ORDINALS_ORIGIN__ = origin;
         window.__NEXUS_ORDINALS_ORIGIN_CONFIRMED__ = false;
-        window.__NEXUS_WEB_BUILD__ = true;
+        window.__NEXUS_ONCHAIN_BUILD__ = true;
       } catch (_) {
         window.__NEXUS_ORDINALS_ORIGIN__ = '';
         window.__NEXUS_ORDINALS_ORIGIN_CONFIRMED__ = false;
-        window.__NEXUS_WEB_BUILD__ = true;
+        window.__NEXUS_ONCHAIN_BUILD__ = true;
       }
+    })();
+  </script>
+
+  
+  
+  
+  
+  <script>
+    (function () {
+      var WORKER_URL = 'https://nexus-bitcoin-proxy.getord.workers.dev';
+      var channelPopup = null;
+      var channelReady = false;
+      var channelReadyResolvers = [];
+      var pending = {};
+      var idCounter = 0;
+
+      window.addEventListener('message', function (event) {
+        if (!event.data) return;
+        if (event.data.type === 'NEXUS_CHANNEL_READY') {
+          channelReady = true;
+
+          var resolvers = channelReadyResolvers.splice(0);
+          for (var i = 0; i < resolvers.length; i++) resolvers[i]();
+          return;
+        }
+        if (event.data.type === 'NEXUS_CHANNEL_FETCH_RESULT') {
+          var p = pending[event.data.id];
+          if (!p) return;
+          delete pending[event.data.id];
+          clearTimeout(p.timer);
+          if (event.data.ok) {
+            p.resolve(event.data.body);
+          } else {
+            p.reject(new Error(event.data.error || ('HTTP ' + (event.data.status || 'error'))));
+          }
+        }
+      });
+
+      function ensureChannel() {
+        if (channelPopup && !channelPopup.closed && channelReady) {
+          return Promise.resolve();
+        }
+
+        if (channelPopup && !channelPopup.closed) {
+          return new Promise(function (resolve) { channelReadyResolvers.push(resolve); });
+        }
+
+        channelReady = false;
+        channelPopup = window.open(
+          WORKER_URL + '/proxy-channel?mode=hidden',
+          'NexusProxyChannel',
+          'width=1,height=1,left=-32000,top=-32000,popup=yes,location=no,menubar=no,toolbar=no,scrollbars=no,resizable=no,status=no'
+        );
+        if (!channelPopup) {
+          return Promise.reject(new Error('Proxy channel popup blocked — please allow popups'));
+        }
+
+        var hidePopup = function () {
+          try { channelPopup.moveTo(-32000, -32000); } catch (_) {}
+          try { channelPopup.resizeTo(1, 1); } catch (_) {}
+          try { channelPopup.blur(); } catch (_) {}
+          try { window.focus(); } catch (_) {}
+        };
+        hidePopup();
+        setTimeout(hidePopup, 50);
+        setTimeout(hidePopup, 200);
+        setTimeout(hidePopup, 500);
+
+        return new Promise(function (resolve, reject) {
+          channelReadyResolvers.push(resolve);
+          setTimeout(function () {
+            if (!channelReady) reject(new Error('Channel popup timed out'));
+          }, 8000);
+        });
+      }
+
+      
+      window.__nexusChannelFetch = function (url, opts, timeoutMs) {
+
+
+
+        console.log('[CHANNEL-DIAG] __nexusChannelFetch called:', String(url || ''));
+        timeoutMs = timeoutMs || 30000;
+        return ensureChannel().then(function () {
+          return new Promise(function (resolve, reject) {
+            var id = 'cf_' + (++idCounter) + '_' + Date.now();
+            var timer = setTimeout(function () {
+              delete pending[id];
+              reject(new Error('Channel fetch timeout: ' + url));
+            }, timeoutMs);
+            pending[id] = { resolve: resolve, reject: reject, timer: timer };
+
+            var origin;
+            try { origin = new URL(WORKER_URL).origin; } catch (_) { origin = '*'; }
+            channelPopup.postMessage({
+              type: 'NEXUS_CHANNEL_FETCH',
+              id: id,
+              url: url,
+              options: {
+                method: (opts && opts.method) || 'GET',
+                headers: (opts && opts.headers) || undefined,
+                body: (opts && opts.body) || undefined
+              }
+            }, origin);
+          });
+        });
+      };
     })();
   </script>
 
@@ -135,7 +242,7 @@
 
           const panel = document.createElement('div');
           panel.id = 'nexus-mini-debug';
-          panel.style.cssText = 'display:none;position:fixed;right:12px;bottom:54px;z-index:2147483647;width:min(420px,calc(100vw - 24px));max-height:40vh;overflow:hidden;background:rgba(10,10,12,.92);color:#e6e6e6;border:1px solid rgba(255,255,255,.18);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.35);font:12px ui-monospace,Menlo,Consolas,monospace;';
+          panel.style.cssText = 'display:none;position:fixed;right:12px;bottom:54px;z:2147483647;width:min(420px,calc(100vw - 24px));max-height:40vh;overflow:hidden;background:rgba(10,10,12,.92);color:#e6e6e6;border:1px solid rgba(255,255,255,.18);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.35);font:12px ui-monospace,Menlo,Consolas,monospace;';
 
           const header = document.createElement('div');
           header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.14);';
@@ -331,8 +438,6 @@
     if (!originalFetch) return;
 
     const wrappedFetch = async function fetchWithOrdinalsFallback(input, init) {
-      const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
-      if (method !== 'GET' && method !== 'HEAD') return originalFetch(input, init);
 
       let url;
       try {
@@ -341,11 +446,120 @@
         } else if (input && typeof input.url === 'string') {
           url = new URL(input.url);
         }
-      } catch (_) {
-        return originalFetch(input, init);
+      } catch (_) {}
+
+
+
+
+
+
+
+      if (window.__NEXUS_ONCHAIN_BUILD__ && url) {
+        var extH = '';
+        try { extH = url.hostname || ''; } catch (_) {}
+        var selfH = '';
+        try { selfH = window.location.hostname || ''; } catch (_) {}
+        var isExt = extH
+          && extH !== 'ordinals.com' && !extH.endsWith('.ordinals.com')
+          && (!selfH || extH !== selfH);
+
+        if (isExt) {
+          var p = url.pathname || '';
+
+          var txHexM = p.match(/(?:\/tx-hex\/|\/api\/tx\/)([0-9a-fA-F]{64})(?:\/hex)?$/);
+          if (txHexM) {
+            try {
+              var rh = await originalFetch('/r/tx/' + txHexM[1], { headers: { Accept: 'application/json' } });
+              if (rh && rh.ok) return rh;
+            } catch (_) {}
+          }
+
+          if (!txHexM) {
+            var txM = p.match(/\/(?:api\/)?tx\/([0-9a-fA-F]{64})(?:\/status)?$/);
+            if (txM) {
+              try {
+                var rt = await originalFetch('/r/tx/' + txM[1], { headers: { Accept: 'application/json' } });
+                if (rt && rt.ok) return rt;
+              } catch (_) {}
+            }
+          }
+
+          if (p === '/block-height' || p.endsWith('/blocks/tip/height')) {
+            try {
+              var rb = await originalFetch('/r/blockheight');
+              if (rb && rb.ok) return rb;
+            } catch (_) {}
+          }
+
+
+
+          var workerHost = '';
+          try { workerHost = new URL('https://nexus-bitcoin-proxy.getord.workers.dev').hostname; } catch (_) {}
+          if (workerHost && extH === workerHost) {
+            var fetchOpts = {
+              method: String((init && init.method) || 'GET'),
+              headers: (init && init.headers) || undefined,
+              body: (init && init.body) || undefined
+            };
+
+            if (window.btcapi && typeof window.btcapi.fetch === 'function') {
+              try {
+                console.log('[FETCH-DIAG] Tier 1: btcapi.fetch for', url.href);
+                var btcapiResult = await window.btcapi.fetch(url.href, fetchOpts);
+                console.log('[FETCH-DIAG] Tier 1 SUCCESS for', url.pathname);
+                var isObj = btcapiResult !== null && typeof btcapiResult === 'object';
+                var bodyStr = isObj ? JSON.stringify(btcapiResult) : String(btcapiResult || '');
+                return new Response(bodyStr, {
+                  status: 200, statusText: 'OK',
+                  headers: { 'Content-Type': isObj ? 'application/json' : 'text/plain' }
+                });
+              } catch (btcErr) {
+                console.warn('[FETCH-DIAG] Tier 1 btcapi.fetch FAILED for', url.pathname, ':', btcErr.message || btcErr);
+
+              }
+            }
+
+            try {
+              console.log('[FETCH-DIAG] Tier 2: proxy channel for', url.href);
+              var channelResp = await window.__nexusChannelFetch(url.href, fetchOpts);
+              console.log('[FETCH-DIAG] Tier 2 SUCCESS for', url.pathname);
+              var isObj2 = channelResp !== null && typeof channelResp === 'object';
+              var bodyStr2 = isObj2 ? JSON.stringify(channelResp) : String(channelResp || '');
+              return new Response(bodyStr2, {
+                status: 200, statusText: 'OK',
+                headers: { 'Content-Type': isObj2 ? 'application/json' : 'text/plain' }
+              });
+            } catch (chErr) {
+              console.error('[FETCH-DIAG] Tier 2 proxy channel FAILED for', url.pathname, ':', chErr.message || chErr);
+              return new Response(JSON.stringify({ error: chErr.message || 'All fetch methods failed' }), {
+                status: 502, statusText: 'Fetch Error',
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
+          }
+
+          var mth = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+          if (mth === 'POST') {
+            return new Response(JSON.stringify({ error: 'Sandbox CSP — external POST blocked' }), {
+              status: 403, statusText: 'CSP Blocked',
+              headers: { 'Content-Type': 'application/json' }
+            });
+          }
+
+          return new Response('[]', {
+            status: 200, statusText: 'OK',
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
       }
 
-      if (!url || !shouldFallbackPath(url.pathname)) return originalFetch(input, init);
+
+      const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD') return originalFetch(input, init);
+
+      if (!url) return originalFetch(input, init);
+
+      if (!shouldFallbackPath(url.pathname)) return originalFetch(input, init);
 
 
       const isREndpoint = url.pathname.startsWith('/r/');
